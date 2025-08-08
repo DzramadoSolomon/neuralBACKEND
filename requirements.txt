@@ -1,0 +1,16 @@
+flask==3.0.3
+flask-cors==5.0.0
+torchvision==0.21.0 # Updated to an available version compatible with torch 2.7.1
+Pillow==10.4.0
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+PyYAML==6.0.2
+yolov5==7.0.13
+pandas==2.2.3
+requests==2.32.3
+gunicorn==23.0.0
+ultralytics==8.3.0 # Keep ultralytics for consistency if app.py uses it
+scipy==1.14.1
+matplotlib==3.9.2
+seaborn==0.13.2
+huggingface_hub==0.17.3 # Keep pinned version
