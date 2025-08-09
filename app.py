@@ -29,7 +29,7 @@ except ImportError as e:
 # Initialize Flask app
 app = Flask(__name__)
 
-# More permissive CORS configuration for debugging
+# UPDATED: Add your new Cloudflare domain to the allowed origins.
 CORS(app, 
      resources={
          r"/predict": {
@@ -37,7 +37,7 @@ CORS(app,
                  "https://neural-pcb-project.vercel.app", 
                  "http://localhost:3000", 
                  "http://127.0.0.1:3000",
-                 "https://appropriate-accuracy-suffering-d.trycloudflare.com" # ADD THIS LINE
+                 "https://appropriate-accuracy-suffering-d.trycloudflare.com" # <-- ADD THIS LINE
              ],
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization"]
@@ -47,7 +47,7 @@ CORS(app,
                  "https://neural-pcb-project.vercel.app", 
                  "http://localhost:3000", 
                  "http://127.0.0.1:3000",
-                 "https://appropriate-accuracy-suffering-d.trycloudflare.com" # AND THIS ONE
+                 "https://appropriate-accuracy-suffering-d.trycloudflare.com" # <-- AND THIS LINE
              ],
              "methods": ["GET", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization"]
@@ -152,55 +152,68 @@ def expand_bounding_box(bbox, image_width, image_height, expansion_factor=0.05):
 
 def process_single_image(image_data, frontend_image_id, filename=None):
     """Process a single image for defect detection using YOLOv5"""
-    # ... (code before the loop)
-    
-    with torch.no_grad():
-        results = model(image)
-    
-    logger.info(f"COMPLETED model inference for {filename or frontend_image_id}.")
-    
-    detections = []
-    
-    # --- CORRECTED LOOP ---
-    # The 'results' object is not an iterable. It's a single object that
-    # contains the detections. Access the pandas dataframe directly from it.
-    
-    # Check if results is a Detections object and process it directly
-    if hasattr(results, 'pandas'):
-        df = results.pandas().xyxy[0]
+    if model is None:
+        logger.error(f"Attempted to process image {filename or frontend_image_id} but model is not loaded.")
+        return {
+            "image_id": frontend_image_id,
+            "error": "Model is not loaded, cannot process image.",
+            "predictions": [],
+            "image_dimensions": {"width": 0, "height": 0},
+            "total_detections": 0
+        }
+    try:
+        # Handle different image input types
+        if isinstance(image_data, str) and image_data.startswith('data:image'):
+            header, encoded = image_data.split(',', 1)
+            image_bytes = base64.b64decode(encoded)
+            image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        else:
+            image = Image.open(image_data.stream).convert('RGB')
         
-        for _, detection in df.iterrows():
-            # ... (rest of the detection processing logic)
-            x1, y1, x2, y2 = detection['xmin'], detection['ymin'], detection['xmax'], detection['ymax']
-            confidence = detection['confidence']
-            class_id = int(detection['class'])
-            class_name = detection['name']
+        original_width, original_height = image.size
+        logger.info(f"Processing image: {filename or frontend_image_id}, Size: {original_width}x{original_height}")
+
+        logger.info(f"STARTING model inference for {filename or frontend_image_id}...")
+        with torch.no_grad(): # Disable gradient calculations for inference to save memory
+            # THIS IS THE KEY LINE WE ARE WATCHING
+            results = model(image) 
+        logger.info(f"COMPLETED model inference for {filename or frontend_image_id}.")
+        
+        detections = []
+        
+        for r in results:
+            df = r.pandas().xyxy[0]
             
-            if class_id in CLASS_NAMES:
-                class_name = CLASS_NAMES[class_id]
-            
-            x1_exp, y1_exp, x2_exp, y2_exp = expand_bounding_box(
-                (x1, y1, x2, y2), original_width, original_height
-            )
-            
-            detection_data = {
-                "class_id": class_id,
-                "class": class_name,
-                "confidence": float(confidence),
-                "bbox": {
-                    "x1": float(x1_exp),
-                    "y1": float(y1_exp),
-                    "x2": float(x2_exp),
-                    "y2": float(y2_exp)
+            for _, detection in df.iterrows():
+                x1, y1, x2, y2 = detection['xmin'], detection['ymin'], detection['xmax'], detection['ymax']
+                confidence = detection['confidence']
+                class_id = int(detection['class'])
+                class_name = detection['name']
+                
+                if class_id in CLASS_NAMES:
+                    class_name = CLASS_NAMES[class_id]
+                
+                x1_exp, y1_exp, x2_exp, y2_exp = expand_bounding_box(
+                    (x1, y1, x2, y2), original_width, original_height
+                )
+                
+                detection_data = {
+                    "class_id": class_id,
+                    "class": class_name,
+                    "confidence": float(confidence),
+                    "bbox": {
+                        "x1": float(x1_exp),
+                        "y1": float(y1_exp),
+                        "x2": float(x2_exp),
+                        "y2": float(y2_exp)
+                    }
                 }
-            }
-            detections.append(detection_data)
-    else:
-        # Fallback for other potential result formats, though less likely
-        logger.error(f"Unexpected results format for {filename or frontend_image_id}. Object is not a Detections object.")
+                
+                detections.append(detection_data)
+                logger.debug(f"  Detection: {class_name} ({confidence:.3f}) at ({x1_exp:.1f}, {y1_exp:.1f}, {x2_exp:.1f}, {y2_exp:.1f})") # Use debug for verbose detection logs
         
-    max_detections_per_image = 5
-    detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
+        max_detections_per_image = 20
+        detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
         
         result = {
             "image_id": frontend_image_id,
