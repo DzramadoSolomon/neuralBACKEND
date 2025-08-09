@@ -80,7 +80,7 @@ if YOLOV5_AVAILABLE:
                 
                 model.conf = 0.25
                 model.iou = 0.45
-                model.max_det = 20
+                model.max_det = 5
                 
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 model.to(device)
@@ -212,7 +212,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
                 detections.append(detection_data)
                 logger.debug(f"  Detection: {class_name} ({confidence:.3f}) at ({x1_exp:.1f}, {y1_exp:.1f}, {x2_exp:.1f}, {y2_exp:.1f})") # Use debug for verbose detection logs
         
-        max_detections_per_image = 20
+        max_detections_per_image = 5
         detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
         
         result = {
