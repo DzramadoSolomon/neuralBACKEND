@@ -171,36 +171,39 @@ def process_single_image(image_data, frontend_image_id, filename=None):
         
         detections = []
         
-        for r in results:
-            df = r.pandas().xyxy[0]
+        # --- CORRECTED CODE START ---
+        # The 'results' object is not an iterable. It's a single object
+        # that contains the detections. Access the pandas dataframe directly.
+        df = results.pandas().xyxy[0]
+        
+        for _, detection in df.iterrows():
+        # --- CORRECTED CODE END ---
+            x1, y1, x2, y2 = detection['xmin'], detection['ymin'], detection['xmax'], detection['ymax']
+            confidence = detection['confidence']
+            class_id = int(detection['class'])
+            class_name = detection['name']
             
-            for _, detection in df.iterrows():
-                x1, y1, x2, y2 = detection['xmin'], detection['ymin'], detection['xmax'], detection['ymax']
-                confidence = detection['confidence']
-                class_id = int(detection['class'])
-                class_name = detection['name']
-                
-                if class_id in CLASS_NAMES:
-                    class_name = CLASS_NAMES[class_id]
-                
-                x1_exp, y1_exp, x2_exp, y2_exp = expand_bounding_box(
-                    (x1, y1, x2, y2), original_width, original_height
-                )
-                
-                detection_data = {
-                    "class_id": class_id,
-                    "class": class_name,
-                    "confidence": float(confidence),
-                    "bbox": {
-                        "x1": float(x1_exp),
-                        "y1": float(y1_exp),
-                        "x2": float(x2_exp),
-                        "y2": float(y2_exp)
-                    }
+            if class_id in CLASS_NAMES:
+                class_name = CLASS_NAMES[class_id]
+            
+            x1_exp, y1_exp, x2_exp, y2_exp = expand_bounding_box(
+                (x1, y1, x2, y2), original_width, original_height
+            )
+            
+            detection_data = {
+                "class_id": class_id,
+                "class": class_name,
+                "confidence": float(confidence),
+                "bbox": {
+                    "x1": float(x1_exp),
+                    "y1": float(y1_exp),
+                    "x2": float(x2_exp),
+                    "y2": float(y2_exp)
                 }
-                
-                detections.append(detection_data)
-                logger.debug(f"  Detection: {class_name} ({confidence:.3f}) at ({x1_exp:.1f}, {y1_exp:.1f}, {x2_exp:.1f}, {y2_exp:.1f})") # Use debug for verbose detection logs
+            }
+            
+            detections.append(detection_data)
+            logger.debug(f"  Detection: {class_name} ({confidence:.3f}) at ({x1_exp:.1f}, {y1_exp:.1f}, {x2_exp:.1f}, {y2_exp:.1f})")
         
         max_detections_per_image = 20
         detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
@@ -227,7 +230,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
             "image_dimensions": {"width": 0, "height": 0},
             "total_detections": 0
         }
-
+        
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
     if request.method == 'OPTIONS':
