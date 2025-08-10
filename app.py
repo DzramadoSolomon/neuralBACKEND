@@ -252,7 +252,6 @@ def process_single_image(image_data, frontend_image_id, filename=None):
 
         
 @app.route('/predict', methods=['POST', 'OPTIONS'])
-@app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
     if request.method == 'OPTIONS':
         return '', 200
@@ -278,8 +277,9 @@ def predict():
                 image_name = img_data.get('name', "JSON_Image")
                 if image_src:
                     result = process_single_image(image_src, frontend_id, image_name)
-                    # Always ensure detections array exists
-                    result["detections"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
+                    # This is the line that needs a more robust check
+                    # Make sure 'predictions' is a list before assigning it
+                    result["predictions"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -312,7 +312,9 @@ def predict():
                         frontend_name = meta.get('name', frontend_name)
 
                     result = process_single_image(file, frontend_id, frontend_name)
-                    result["detections"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
+                    # This is the line that needs a more robust check
+                    # Make sure 'predictions' is a list before assigning it
+                    result["predictions"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -328,7 +330,9 @@ def predict():
                 frontend_id = f"single_{uuid.uuid4().hex[:8]}"
                 logger.info(f"Received single image '{file.filename}' via old format.")
                 result = process_single_image(file, frontend_id, file.filename)
-                result["detections"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
+                # This is the line that needs a more robust check
+                # Make sure 'predictions' is a list before assigning it
+                result["predictions"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                 results.append(result)
                 if 'error' not in result:
                     total_defects += result['total_detections']
@@ -342,7 +346,8 @@ def predict():
         
         defect_summary = {}
         for result in results:
-            if 'error' not in result:
+            # Add a check to ensure there's no 'error' key and 'predictions' is a list before iterating
+            if 'error' not in result and isinstance(result.get('predictions'), list):
                 for detection in result['predictions']:
                     defect_type = detection['class']
                     defect_summary[defect_type] = defect_summary.get(defect_type, 0) + 1
@@ -368,7 +373,6 @@ def predict():
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Unexpected error in predict endpoint: {str(e)}", exc_info=True)
         return jsonify({"error": f"Server error: {str(e)}"}), 500
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
