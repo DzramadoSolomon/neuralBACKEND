@@ -276,6 +276,8 @@ def predict():
                 image_name = img_data.get('name', "JSON_Image")
                 if image_src:
                     result = process_single_image(image_src, frontend_id, image_name)
+                    # ✅ Add detections alias
+                    result["detections"] = result.get("predictions", [])
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -307,6 +309,8 @@ def predict():
                         frontend_name = meta.get('name', frontend_name)
 
                     result = process_single_image(file, frontend_id, frontend_name)
+                    # ✅ Add detections alias
+                    result["detections"] = result.get("predictions", [])
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -321,6 +325,8 @@ def predict():
                 frontend_id = f"single_{uuid.uuid4().hex[:8]}"
                 logger.info(f"Received single image '{file.filename}' via old format.")
                 result = process_single_image(file, frontend_id, file.filename)
+                # ✅ Add detections alias
+                result["detections"] = result.get("predictions", [])
                 results.append(result)
                 if 'error' not in result:
                     total_defects += result['total_detections']
@@ -357,6 +363,10 @@ def predict():
         logger.info(f"Processed {len(results)} images. Total defects found: {total_defects}")
         return jsonify(response_data), 200
         
+    except Exception as e:
+        logger.critical(f"CRITICAL ERROR: Unexpected error in predict endpoint: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+ 
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Unexpected error in predict endpoint: {str(e)}", exc_info=True)
         return jsonify({"error": f"Server error: {str(e)}"}), 500
