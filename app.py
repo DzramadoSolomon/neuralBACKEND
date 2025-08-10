@@ -252,6 +252,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
 
         
 @app.route('/predict', methods=['POST', 'OPTIONS'])
+@app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
     if request.method == 'OPTIONS':
         return '', 200
@@ -267,6 +268,7 @@ def predict():
     logger.info("--- Starting prediction request ---")
     
     try:
+        # JSON body (base64 images)
         if request.is_json and 'images_data' in request.json:
             images_data = request.json['images_data']
             logger.info(f"Received {len(images_data)} images from JSON data.")
@@ -276,8 +278,8 @@ def predict():
                 image_name = img_data.get('name', "JSON_Image")
                 if image_src:
                     result = process_single_image(image_src, frontend_id, image_name)
-                    # ✅ Add detections alias
-                    result["detections"] = result.get("predictions", [])
+                    # Always ensure detections array exists
+                    result["detections"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -286,6 +288,7 @@ def predict():
                 else:
                     processing_errors.append(f"Image '{image_name}' (ID: {frontend_id}): Missing image source data.")
 
+        # Multiple files (FormData)
         elif 'images' in request.files:
             files = request.files.getlist('images')
             image_metadata_json = request.form.get('image_metadata')
@@ -309,8 +312,7 @@ def predict():
                         frontend_name = meta.get('name', frontend_name)
 
                     result = process_single_image(file, frontend_id, frontend_name)
-                    # ✅ Add detections alias
-                    result["detections"] = result.get("predictions", [])
+                    result["detections"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -319,14 +321,14 @@ def predict():
                 else:
                     processing_errors.append(f"Skipping empty or invalid file at index {i}.")
         
+        # Single file (old format)
         elif 'image' in request.files:
             file = request.files['image']
             if file and file.filename:
                 frontend_id = f"single_{uuid.uuid4().hex[:8]}"
                 logger.info(f"Received single image '{file.filename}' via old format.")
                 result = process_single_image(file, frontend_id, file.filename)
-                # ✅ Add detections alias
-                result["detections"] = result.get("predictions", [])
+                result["detections"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                 results.append(result)
                 if 'error' not in result:
                     total_defects += result['total_detections']
@@ -366,10 +368,7 @@ def predict():
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Unexpected error in predict endpoint: {str(e)}", exc_info=True)
         return jsonify({"error": f"Server error: {str(e)}"}), 500
- 
-    except Exception as e:
-        logger.critical(f"CRITICAL ERROR: Unexpected error in predict endpoint: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
