@@ -229,7 +229,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
 
         result = {
             "image_id": frontend_image_id,
-            "predictions": detections,
+            "detections": detections, # Changed from "predictions" to "detections"
             "image_dimensions": {
                 "width": original_width,
                 "height": original_height
@@ -337,9 +337,8 @@ def predict():
         
         defect_summary = {}
         for result in results:
-            # Check for error first, then ensure 'predictions' exists and is iterable
-            if 'error' not in result and isinstance(result.get('predictions'), list):
-                for detection in result['predictions']:
+            if 'error' not in result and isinstance(result.get('detections'), list):
+                for detection in result['detections']: # Iterating over `detections` now
                     defect_type = detection['class']
                     defect_summary[defect_type] = defect_summary.get(defect_type, 0) + 1
         
