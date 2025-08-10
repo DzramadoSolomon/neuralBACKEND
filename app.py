@@ -277,9 +277,6 @@ def predict():
                 image_name = img_data.get('name', "JSON_Image")
                 if image_src:
                     result = process_single_image(image_src, frontend_id, image_name)
-                    # This is the line that needs a more robust check
-                    # Make sure 'predictions' is a list before assigning it
-                    result["predictions"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -312,9 +309,6 @@ def predict():
                         frontend_name = meta.get('name', frontend_name)
 
                     result = process_single_image(file, frontend_id, frontend_name)
-                    # This is the line that needs a more robust check
-                    # Make sure 'predictions' is a list before assigning it
-                    result["predictions"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                     results.append(result)
                     if 'error' not in result:
                         total_defects += result['total_detections']
@@ -330,9 +324,6 @@ def predict():
                 frontend_id = f"single_{uuid.uuid4().hex[:8]}"
                 logger.info(f"Received single image '{file.filename}' via old format.")
                 result = process_single_image(file, frontend_id, file.filename)
-                # This is the line that needs a more robust check
-                # Make sure 'predictions' is a list before assigning it
-                result["predictions"] = result.get("predictions", []) if isinstance(result.get("predictions"), list) else []
                 results.append(result)
                 if 'error' not in result:
                     total_defects += result['total_detections']
@@ -346,7 +337,7 @@ def predict():
         
         defect_summary = {}
         for result in results:
-            # Add a check to ensure there's no 'error' key and 'predictions' is a list before iterating
+            # Check for error first, then ensure 'predictions' exists and is iterable
             if 'error' not in result and isinstance(result.get('predictions'), list):
                 for detection in result['predictions']:
                     defect_type = detection['class']
