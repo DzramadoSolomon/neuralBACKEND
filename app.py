@@ -169,52 +169,62 @@ def process_single_image(image_data, frontend_image_id, filename=None):
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         else:
             image = Image.open(image_data.stream).convert('RGB')
-        
+
         original_width, original_height = image.size
         logger.info(f"Processing image: {filename or frontend_image_id}, Size: {original_width}x{original_height}")
 
         logger.info(f"STARTING model inference for {filename or frontend_image_id}...")
-        with torch.no_grad(): # Disable gradient calculations for inference to save memory
-            # THIS IS THE KEY LINE WE ARE WATCHING
-            results = model(image) 
+        with torch.no_grad():
+            results = model(image)  # YOLOv5 inference
         logger.info(f"COMPLETED model inference for {filename or frontend_image_id}.")
-        
+
         detections = []
-        
-        for r in results:
-            df = r.pandas().xyxy[0]
-            
+
+        # Handle both single image and batch outputs
+        pandas_results = results.pandas().xyxy
+        if not isinstance(pandas_results, list):
+            pandas_results = [pandas_results]
+
+        for df in pandas_results:
             for _, detection in df.iterrows():
                 x1, y1, x2, y2 = detection['xmin'], detection['ymin'], detection['xmax'], detection['ymax']
                 confidence = detection['confidence']
                 class_id = int(detection['class'])
                 class_name = detection['name']
-                
+
                 if class_id in CLASS_NAMES:
                     class_name = CLASS_NAMES[class_id]
-                
+
+                # Expand bbox slightly
                 x1_exp, y1_exp, x2_exp, y2_exp = expand_bounding_box(
                     (x1, y1, x2, y2), original_width, original_height
                 )
-                
+
+                # Normalize coordinates to 0–1 range
+                norm_x1 = round(x1_exp / original_width, 6)
+                norm_y1 = round(y1_exp / original_height, 6)
+                norm_x2 = round(x2_exp / original_width, 6)
+                norm_y2 = round(y2_exp / original_height, 6)
+
                 detection_data = {
                     "class_id": class_id,
                     "class": class_name,
                     "confidence": float(confidence),
                     "bbox": {
-                        "x1": float(x1_exp),
-                        "y1": float(y1_exp),
-                        "x2": float(x2_exp),
-                        "y2": float(y2_exp)
+                        "x1": norm_x1,
+                        "y1": norm_y1,
+                        "x2": norm_x2,
+                        "y2": norm_y2
                     }
                 }
-                
+
                 detections.append(detection_data)
-                logger.debug(f"  Detection: {class_name} ({confidence:.3f}) at ({x1_exp:.1f}, {y1_exp:.1f}, {x2_exp:.1f}, {y2_exp:.1f})") # Use debug for verbose detection logs
-        
+                logger.debug(f"Detection: {class_name} ({confidence:.3f}) normalized at ({norm_x1}, {norm_y1}, {norm_x2}, {norm_y2})")
+
+        # Keep only top-N detections
         max_detections_per_image = 5
         detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
-        
+
         result = {
             "image_id": frontend_image_id,
             "predictions": detections,
@@ -224,10 +234,10 @@ def process_single_image(image_data, frontend_image_id, filename=None):
             },
             "total_detections": len(detections)
         }
-        
-        logger.info(f"  Found {len(detections)} detections for {filename or frontend_image_id}")
+
+        logger.info(f"Found {len(detections)} detections for {filename or frontend_image_id}")
         return result
-        
+
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Failed during image processing for {filename or frontend_image_id}: {str(e)}", exc_info=True)
         return {
@@ -237,6 +247,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
             "image_dimensions": {"width": 0, "height": 0},
             "total_detections": 0
         }
+
         
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
