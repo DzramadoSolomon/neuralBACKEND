@@ -37,7 +37,8 @@ CORS(app,
                  "https://neural-pcb-project.vercel.app", 
                  "http://localhost:3000", 
                  "http://127.0.0.1:3000",
-                 "https://appropriate-accuracy-suffering-d.trycloudflare.com" # <-- ADD THIS LINE
+                 "https://appropriate-accuracy-suffering-d.trycloudflare.com",
+                 "https://sensitive-delivers-peas-research.trycloudflare.com" # <-- ADD THIS LINE
              ],
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization"]
@@ -47,7 +48,8 @@ CORS(app,
                  "https://neural-pcb-project.vercel.app", 
                  "http://localhost:3000", 
                  "http://127.0.0.1:3000",
-                 "https://appropriate-accuracy-suffering-d.trycloudflare.com" # <-- AND THIS LINE
+                 "https://appropriate-accuracy-suffering-d.trycloudflare.com",
+                 "https://sensitive-delivers-peas-research.trycloudflare.com"# <-- AND THIS LINE
              ],
              "methods": ["GET", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization"]
