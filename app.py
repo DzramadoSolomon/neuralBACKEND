@@ -1,261 +1,93 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import torch
-from PIL import Image
-import io
-import base64
-import numpy as np
 import os
 import json
 import uuid
 import logging
-import sys
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from PIL import Image
+import torch
+import numpy as np
+import io
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Setup basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Import YOLOv5 using the pip package
-try:
-    import yolov5
-    YOLOV5_AVAILABLE = True
-    logger.info("YOLOv5 package imported successfully from pip.")
-except ImportError as e:
-    logger.critical(f"CRITICAL ERROR: Failed to import YOLOv5 package: {e}")
-    logger.critical("Please ensure yolov5 is installed. Render build might be failing.")
-    YOLOV5_AVAILABLE = False
-    sys.exit(1)
-
-# Initialize Flask app
 app = Flask(__name__)
+CORS(app) # Enable CORS for all routes
 
-# UPDATED: Add your new Cloudflare domain to the allowed origins.
-CORS(app, 
-     resources={
-         r"/predict": {
-             "origins": [
-                 "https://neural-pcb-project.vercel.app", 
-                 "http://localhost:3000", 
-                 "http://127.0.0.1:3000",
-                 "https://appropriate-accuracy-suffering-d.trycloudflare.com",
-                 "https://sensitive-delivers-peas-research.trycloudflare.com" # <-- ADD THIS LINE
-             ],
-             "methods": ["GET", "POST", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"]
-         },
-         r"/health": {
-             "origins": [
-                 "https://neural-pcb-project.vercel.app", 
-                 "http://localhost:3000", 
-                 "http://127.0.0.1:3000",
-                 "https://appropriate-accuracy-suffering-d.trycloudflare.com",
-                 "https://sensitive-delivers-peas-research.trycloudflare.com"# <-- AND THIS LINE
-             ],
-             "methods": ["GET", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"]
-         }
-     },
-     supports_credentials=True)
-
-# Load YOLOv5 model
+# Define the global model and class names
 model = None
-CLASS_NAMES = {}
+CLASS_NAMES = []
+# Define the device for model inference
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-if YOLOV5_AVAILABLE:
-    logger.info("Attempting to load YOLOv5 model...")
+def load_model():
+    """Loads the YOLOv5 model from disk."""
+    global model, CLASS_NAMES
+    model_path = os.getenv('MODEL_PATH', 'best.pt')
+    logger.info(f"Attempting to load model from {model_path} on device {DEVICE}...")
     try:
-        model_path = None
-        if os.path.exists('best.pt'):
-            model_path = 'best.pt'
-            logger.info("Found custom model: best.pt")
-        elif os.path.exists('last.pt'):
-            model_path = 'last.pt'
-            logger.info("Found custom model: last.pt")
-        else:
-            logger.warning("No custom model found (best.pt or last.pt). Attempting to use pretrained YOLOv5s as fallback.")
-            model_path = 'yolov5s.pt'
-
-        if model_path:
-            logger.info(f"Loading model from path: {model_path}")
-            try:
-                model = yolov5.load(model_path)
-                
-                model.conf = 0.25
-                model.iou = 0.45
-                model.max_det = 5
-                
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                model.to(device)
-                
-                logger.info(f"Model loaded successfully: {model_path} on device: {device}")
-                
-                if hasattr(model, 'names') and isinstance(model.names, dict):
-                    CLASS_NAMES = model.names
-                    logger.info(f"Model class names (from model.names): {CLASS_NAMES}")
-                else:
-                    CLASS_NAMES = {
-                        0: 'missing_hole', 1: 'mouse_bite', 2: 'open_circuit',
-                        3: 'short', 4: 'spur', 5: 'spurious_copper'
-                    }
-                    logger.warning(f"Model.names not found or invalid. Using hardcoded class names: {CLASS_NAMES}")
-
-            except Exception as load_error:
-                logger.critical(f"CRITICAL ERROR: Failed to load model with yolov5.load(): {load_error}", exc_info=True)
-                model = None
-        else:
-            logger.critical("CRITICAL ERROR: No model path determined. Model will not be loaded.")
-            model = None
-        
+        model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True, device=DEVICE)
+        model.eval()
+        CLASS_NAMES = model.names
+        logger.info(f"Model loaded successfully. Found {len(CLASS_NAMES)} classes.")
     except Exception as e:
-        logger.critical(f"CRITICAL ERROR: General error during model loading block initialization: {e}", exc_info=True)
+        logger.critical(f"Failed to load model: {e}")
         model = None
-else:
-    logger.critical("CRITICAL ERROR: YOLOv5 not available (import failed). Model will not be loaded.")
+        CLASS_NAMES = []
 
-if not CLASS_NAMES:
-    CLASS_NAMES = {
-        0: 'missing_hole', 1: 'mouse_bite', 2: 'open_circuit',
-        3: 'short', 4: 'spur', 5: 'spurious_copper'
-    }
-    logger.warning("CLASS_NAMES was not populated from model, using default hardcoded names.")
-
-
-@app.route('/')
-def home():
-    """Simple home route for health check."""
-    model_status = "loaded" if model is not None else "not loaded"
-    return f"PCB Defect Detector Backend is running! Model status: {model_status}", 200
-
-@app.route('/health')
-def health():
-    """Health check endpoint."""
-    return jsonify({
-        "status": "healthy",
-        "model_loaded": model is not None,
-        "yolov5_available": YOLOV5_AVAILABLE
-    }), 200
-
-def expand_bounding_box(bbox, image_width, image_height, expansion_factor=0.05):
-    """Expand bounding box by a given factor"""
-    x1, y1, x2, y2 = bbox
-    
-    width = x2 - x1
-    height = y2 - y1
-    
-    expand_x = width * expansion_factor
-    expand_y = height * expansion_factor
-    
-    new_x1 = max(0, x1 - expand_x)
-    new_y1 = max(0, y1 - expand_y)
-    new_x2 = min(image_width, x2 + expand_x)
-    new_y2 = min(image_height, y2 + expand_y)
-    
-    return new_x1, new_y1, new_x2, new_y2
-
-def process_single_image(image_data, frontend_image_id, filename=None):
-    """Process a single image for defect detection using YOLOv5"""
+def process_single_image(image_stream, frontend_image_id, frontend_name):
+    """
+    Processes a single image stream for object detection.
+    Args:
+        image_stream: An image file object or base64 string.
+        frontend_image_id: Unique ID for the image from the frontend.
+        frontend_name: The original name of the image file.
+    Returns:
+        A dictionary with detection results or an error message.
+    """
     if model is None:
-        logger.error(f"Attempted to process image {filename or frontend_image_id} but model is not loaded.")
-        return {
-            "image_id": frontend_image_id,
-            "error": "Model is not loaded, cannot process image.",
-            "predictions": [],
-            "image_dimensions": {"width": 0, "height": 0},
-            "total_detections": 0
-        }
+        return {"image_id": frontend_image_id, "error": "Model is not loaded."}
+    
     try:
-        # Handle different image input types
-        if isinstance(image_data, str) and image_data.startswith('data:image'):
-            header, encoded = image_data.split(',', 1)
-            image_bytes = base64.b64decode(encoded)
-            image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        else:
-            image = Image.open(image_data.stream).convert('RGB')
+        if isinstance(image_stream, str): # Handle base64 encoded images
+            from base64 import b64decode
+            image_stream = io.BytesIO(b64decode(image_stream.split(',')[1]))
 
-        original_width, original_height = image.size
-        logger.info(f"Processing image: {filename or frontend_image_id}, Size: {original_width}x{original_height}")
-
-        logger.info(f"STARTING model inference for {filename or frontend_image_id}...")
-        with torch.no_grad():
-            results = model(image)  # YOLOv5 inference
-        logger.info(f"COMPLETED model inference for {filename or frontend_image_id}.")
-
-        predictions = []
-
-        # Handle both single image and batch outputs
-        pandas_results = results.pandas().xyxy
-        if not isinstance(pandas_results, list):
-            pandas_results = [pandas_results]
-
-        for df in pandas_results:
-            for _, detection in df.iterrows():
-                x1, y1, x2, y2 = detection['xmin'], detection['ymin'], detection['xmax'], detection['ymax']
-                confidence = detection['confidence']
-                class_id = int(detection['class'])
-                class_name = detection['name']
-
-                if class_id in CLASS_NAMES:
-                    class_name = CLASS_NAMES[class_id]
-
-                # Expand bbox slightly
-                x1_exp, y1_exp, x2_exp, y2_exp = expand_bounding_box(
-                    (x1, y1, x2, y2), original_width, original_height
-                )
-
-                # Use pixel coordinates (what frontend expects)
-                detection_data = {
-                    "class_id": class_id,
-                    "class": class_name,
-                    "confidence": float(confidence),
-                    "bbox": {
-                        "x1": float(x1_exp),
-                        "y1": float(y1_exp),
-                        "x2": float(x2_exp),
-                        "y2": float(y2_exp)
-                    }
-                }
-
-                predictions.append(detection_data)
-                logger.debug(f"Detection: {class_name} ({confidence:.3f}) at ({x1_exp}, {y1_exp}, {x2_exp}, {y2_exp})")
-
-        # Keep only top-N detections
-        max_detections_per_image = 5
-        predictions = sorted(predictions, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
+        # Load the image using PIL and convert to RGB
+        pil_image = Image.open(image_stream).convert('RGB')
+        original_width, original_height = pil_image.size
+        img_np = np.array(pil_image)
+        
+        # Perform prediction
+        results = model(img_np)
+        
+        # Extract predictions, ensuring it's a list even if no detections are found
+        predictions_list = []
+        # The .pred attribute contains the list of detections. The [0] is for the first image in the batch.
+        if results.pred and len(results.pred[0]):
+            for *box, conf, cls in results.pred[0]:
+                predictions_list.append({
+                    "box": [int(b) for b in box],
+                    "confidence": float(conf),
+                    "class": CLASS_NAMES[int(cls)]
+                })
 
         result = {
             "image_id": frontend_image_id,
-            "predictions": predictions,
+            "predictions": predictions_list,
             "image_dimensions": {
                 "width": original_width,
                 "height": original_height
             },
-            "total_detections": len(predictions)
+            "total_detections": len(predictions_list)
         }
-
-        # DEBUG: Log the exact result structure
-        logger.info(f"RESULT DEBUG for {filename or frontend_image_id}:")
-        logger.info(f"- image_id: {result['image_id']}")
-        logger.info(f"- predictions type: {type(result['predictions'])}")
-        logger.info(f"- predictions length: {len(result['predictions'])}")
-        logger.info(f"- image_dimensions: {result['image_dimensions']}")
-        logger.info(f"- total_detections: {result['total_detections']}")
-        
-        if predictions:
-            logger.info(f"- First prediction structure: {predictions[0]}")
-
-        logger.info(f"Found {len(predictions)} predictions for {filename or frontend_image_id}")
         return result
-
     except Exception as e:
-        logger.critical(f"CRITICAL ERROR: Failed during image processing for {filename or frontend_image_id}: {str(e)}", exc_info=True)
-        return {
-            "image_id": frontend_image_id,
-            "error": f"Processing failed: {str(e)}",
-            "predictions": [],
-            "image_dimensions": {"width": 0, "height": 0},
-            "total_detections": 0
-        }
-        
+        logger.error(f"Error processing image {frontend_name} (ID: {frontend_image_id}): {e}", exc_info=True)
+        return {"image_id": frontend_image_id, "error": f"Processing failed: {str(e)}"}
+
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
     if request.method == 'OPTIONS':
@@ -343,7 +175,7 @@ def predict():
         defect_summary = {}
         for result in results:
             if 'error' not in result and isinstance(result.get('predictions'), list):
-                for detection in result['predictions']: # Corrected key to 'predictions'
+                for detection in result['predictions']:
                     defect_type = detection['class']
                     defect_summary[defect_type] = defect_summary.get(defect_type, 0) + 1
         
@@ -370,5 +202,6 @@ def predict():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    load_model()
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host='0.0.0.0', port=port, debug=True)
