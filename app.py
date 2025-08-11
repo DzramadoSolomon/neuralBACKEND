@@ -463,13 +463,13 @@ def predict():
         if not results:
             return jsonify({"error": "No valid images were processed."}), 400
         
-       defect_summary = {}
+        defect_summary = {}
         for result in results:
-            if 'error' not in result and isinstance(result.get('predictions'), list):  # Changed from 'detections' to 'predictions'
-                for detection in result['predictions']:  # Changed from 'detections' to 'predictions'
+            if 'error' not in result and isinstance(result.get('predictions'), list):
+                for detection in result['predictions']: # Corrected key to 'predictions'
                     defect_type = detection['class']
                     defect_summary[defect_type] = defect_summary.get(defect_type, 0) + 1
-            
+        
         response_data = {
             "results": results,
             "summary": {
