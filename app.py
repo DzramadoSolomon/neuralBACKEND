@@ -61,7 +61,7 @@ def process_single_image(image_stream, frontend_image_id, frontend_name):
         img_np = np.array(pil_image)
         
         # Perform prediction
-        results = model(img_np)
+        results = model(img_np, size=original_width) # Pass image size for better results
         
         # Extract predictions, ensuring it's a list even if no detections are found
         predictions_list = []
