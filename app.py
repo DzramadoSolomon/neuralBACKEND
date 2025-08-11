@@ -9,15 +9,25 @@ import torch
 import numpy as np
 import io
 from base64 import b64decode
+import sys
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Import YOLOv5 using the pip package
+try:
+    import yolov5
+    YOLOV5_AVAILABLE = True
+    logger.info("YOLOv5 package imported successfully from pip.")
+except ImportError as e:
+    logger.critical(f"CRITICAL ERROR: Failed to import YOLOv5 package: {e}")
+    YOLOV5_AVAILABLE = False
+    sys.exit(1)
+
 app = Flask(__name__)
 
 # UPDATED: Add your Cloudflare domain to the allowed origins.
-# You may need to update this with your specific domain.
 CORS(app, resources={
     r"/predict": {
         "origins": [
@@ -55,7 +65,6 @@ def load_model():
     model_path = os.getenv('MODEL_PATH', 'best.pt')
     logger.info(f"Attempting to load model from {model_path} on device {DEVICE}...")
     try:
-        # NOTE: Using a simple reload here to ensure the latest changes are picked up.
         model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True, device=DEVICE)
         model.eval()
         CLASS_NAMES = model.names
@@ -67,7 +76,7 @@ def load_model():
 
 def process_single_image(image_stream, frontend_image_id, frontend_name):
     """
-    Processes a single image stream for object detection.
+    Processes a single image stream for object detection using a more robust method.
     Args:
         image_stream: An image file object or base64 string.
         frontend_image_id: Unique ID for the image from the frontend.
@@ -83,31 +92,32 @@ def process_single_image(image_stream, frontend_image_id, frontend_name):
         if isinstance(image_stream, str): # Handle base64 encoded images
             base64_data = image_stream.split(',')[1]
             image_stream = io.BytesIO(b64decode(base64_data))
-
-        # Load the image using PIL
+        
         pil_image = Image.open(image_stream).convert('RGB')
         original_width, original_height = pil_image.size
         
         # Check for valid image dimensions
         if original_width == 0 or original_height == 0:
             return {"image_id": frontend_image_id, "error": "Processing failed: Image dimensions are zero."}
-
+        
         img_np = np.array(pil_image)
         
         # Perform prediction
         results = model(img_np, size=original_width)
         
-        # Extract predictions, ensuring it's a list even if no detections are found
-        predictions_list = []
-        # The .pred attribute is a list of tensors for each image in the batch.
-        # We access the first item [0] for our single image.
-        if results.pred and len(results.pred[0]):
-            for *box, conf, cls in results.pred[0]:
-                predictions_list.append({
-                    "box": [float(b) for b in box],
-                    "confidence": float(conf),
-                    "class": CLASS_NAMES[int(cls)]
-                })
+        # Use pandas to get a robust, iterable list of predictions
+        predictions_df = results.pandas().xyxy[0]
+        predictions_list = predictions_df.to_dict('records')
+
+        for detection in predictions_list:
+            detection['class'] = CLASS_NAMES[int(detection['class'])]
+            detection['box'] = [
+                float(detection.pop('xmin')),
+                float(detection.pop('ymin')),
+                float(detection.pop('xmax')),
+                float(detection.pop('ymax'))
+            ]
+            detection.pop('name') # Remove the extra 'name' field from pandas output
 
         result = {
             "image_id": frontend_image_id,
@@ -119,9 +129,8 @@ def process_single_image(image_stream, frontend_image_id, frontend_name):
             "total_detections": len(predictions_list)
         }
         return result
-
+    
     except Exception as e:
-        # Return a result with zero dimensions if an error occurs during processing
         logger.error(f"Error processing image {frontend_name} (ID: {frontend_image_id}): {e}", exc_info=True)
         return {
             "image_id": frontend_image_id,
@@ -139,7 +148,7 @@ def predict():
     if model is None:
         logger.error("Predict endpoint called but model is not loaded.")
         return jsonify({"error": "Model not loaded. Please check server logs."}), 500
-
+    
     results = []
     total_defects = 0
     processing_errors = []
@@ -147,7 +156,6 @@ def predict():
     logger.info("--- Starting prediction request ---")
     
     try:
-        # JSON body (base64 images)
         if request.is_json and 'images_data' in request.json:
             images_data = request.json['images_data']
             logger.info(f"Received {len(images_data)} images from JSON data.")
@@ -164,8 +172,7 @@ def predict():
                         processing_errors.append(f"Image '{image_name}' (ID: {frontend_id}): {result['error']}")
                 else:
                     processing_errors.append(f"Image '{image_name}' (ID: {frontend_id}): Missing image source data.")
-
-        # Multiple files (FormData)
+        
         elif 'images' in request.files:
             files = request.files.getlist('images')
             image_metadata_json = request.form.get('image_metadata')
@@ -175,7 +182,7 @@ def predict():
                     image_metadata = json.loads(image_metadata_json)
                 except json.JSONDecodeError:
                     logger.warning("Could not decode image_metadata JSON from frontend.")
-
+            
             logger.info(f"Received {len(files)} uploaded files via FormData.")
             
             for i, file in enumerate(files):
@@ -197,7 +204,6 @@ def predict():
                 else:
                     processing_errors.append(f"Skipping empty or invalid file at index {i}.")
         
-        # Single file (old format)
         elif 'image' in request.files:
             file = request.files['image']
             if file and file.filename:
@@ -208,7 +214,7 @@ def predict():
                 if 'error' not in result:
                     total_defects += result['total_detections']
                 else:
-                    processing_errors.append(f"Image '{file.filename}' (ID: {frontend_id}): {result['error']}")
+                        processing_errors.append(f"Image '{file.filename}' (ID: {frontend_id}): {result['error']}")
         else:
             return jsonify({"error": "No valid images provided for detection. Please check your request format."}), 400
         
@@ -254,4 +260,7 @@ def health_check():
 if __name__ == '__main__':
     load_model()
     port = int(os.environ.get("PORT", 8000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    if os.environ.get('NODE_ENV') == 'development':
+      app.run(host='0.0.0.0', port=8000, debug=True)
+    else:
+      app.run(host='0.0.0.0', port=port, debug=False)
