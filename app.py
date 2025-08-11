@@ -159,7 +159,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
         return {
             "image_id": frontend_image_id,
             "error": "Model is not loaded, cannot process image.",
-            "predictions": [],
+            "predictions": [],  # Changed from detections to predictions
             "image_dimensions": {"width": 0, "height": 0},
             "total_detections": 0
         }
@@ -180,7 +180,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
             results = model(image)  # YOLOv5 inference
         logger.info(f"COMPLETED model inference for {filename or frontend_image_id}.")
 
-        detections = []
+        predictions = []  # Changed from detections to predictions
 
         # Handle both single image and batch outputs
         pandas_results = results.pandas().xyxy
@@ -202,42 +202,37 @@ def process_single_image(image_data, frontend_image_id, filename=None):
                     (x1, y1, x2, y2), original_width, original_height
                 )
 
-                # Normalize coordinates to 0–1 range
-                norm_x1 = round(x1_exp / original_width, 6)
-                norm_y1 = round(y1_exp / original_height, 6)
-                norm_x2 = round(x2_exp / original_width, 6)
-                norm_y2 = round(y2_exp / original_height, 6)
-
+                # Return original pixel coordinates (not normalized)
                 detection_data = {
                     "class_id": class_id,
                     "class": class_name,
                     "confidence": float(confidence),
                     "bbox": {
-                        "x1": norm_x1,
-                        "y1": norm_y1,
-                        "x2": norm_x2,
-                        "y2": norm_y2
+                        "x1": float(x1_exp),  # Keep as pixel coordinates
+                        "y1": float(y1_exp),
+                        "x2": float(x2_exp),
+                        "y2": float(y2_exp)
                     }
                 }
 
-                detections.append(detection_data)
-                logger.debug(f"Detection: {class_name} ({confidence:.3f}) normalized at ({norm_x1}, {norm_y1}, {norm_x2}, {norm_y2})")
+                predictions.append(detection_data)  # Changed from detections to predictions
+                logger.debug(f"Detection: {class_name} ({confidence:.3f}) at ({x1_exp}, {y1_exp}, {x2_exp}, {y2_exp})")
 
         # Keep only top-N detections
         max_detections_per_image = 5
-        detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
+        predictions = sorted(predictions, key=lambda x: x['confidence'], reverse=True)[:max_detections_per_image]
 
         result = {
             "image_id": frontend_image_id,
-            "detections": detections, # Changed from "predictions" to "detections"
+            "predictions": predictions,  # Changed from detections to predictions
             "image_dimensions": {
                 "width": original_width,
                 "height": original_height
             },
-            "total_detections": len(detections)
+            "total_detections": len(predictions)  # Changed from detections to predictions
         }
 
-        logger.info(f"Found {len(detections)} detections for {filename or frontend_image_id}")
+        logger.info(f"Found {len(predictions)} detections for {filename or frontend_image_id}")
         return result
 
     except Exception as e:
@@ -245,7 +240,7 @@ def process_single_image(image_data, frontend_image_id, filename=None):
         return {
             "image_id": frontend_image_id,
             "error": f"Processing failed: {str(e)}",
-            "predictions": [],
+            "predictions": [],  # Changed from detections to predictions
             "image_dimensions": {"width": 0, "height": 0},
             "total_detections": 0
         }
@@ -335,13 +330,13 @@ def predict():
         if not results:
             return jsonify({"error": "No valid images were processed."}), 400
         
-        defect_summary = {}
+       defect_summary = {}
         for result in results:
-            if 'error' not in result and isinstance(result.get('detections'), list):
-                for detection in result['detections']: # Iterating over `detections` now
+            if 'error' not in result and isinstance(result.get('predictions'), list):  # Changed from 'detections' to 'predictions'
+                for detection in result['predictions']:  # Changed from 'detections' to 'predictions'
                     defect_type = detection['class']
                     defect_summary[defect_type] = defect_summary.get(defect_type, 0) + 1
-        
+            
         response_data = {
             "results": results,
             "summary": {
