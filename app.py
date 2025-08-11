@@ -61,19 +61,21 @@ def process_single_image(image_stream, frontend_image_id, frontend_name):
         img_np = np.array(pil_image)
         
         # Perform prediction
-        results = model(img_np, size=original_width) # Pass image size for better results
+        results = model(img_np)
         
-        # Extract predictions, ensuring it's a list even if no detections are found
+        # Extract predictions. The 'results' object is not iterable directly.
+        # We need to access the specific prediction data.
         predictions_list = []
-        # The .pred attribute contains the list of detections. The [0] is for the first image in the batch.
         if results.pred and len(results.pred[0]):
+            # The results.pred attribute is a list of tensors.
+            # We iterate over the first tensor for the first image in the batch.
             for *box, conf, cls in results.pred[0]:
                 predictions_list.append({
-                    "box": [int(b) for b in box],
+                    "box": [float(b) for b in box],
                     "confidence": float(conf),
                     "class": CLASS_NAMES[int(cls)]
                 })
-
+        
         result = {
             "image_id": frontend_image_id,
             "predictions": predictions_list,
