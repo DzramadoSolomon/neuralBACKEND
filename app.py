@@ -8,13 +8,40 @@ from PIL import Image
 import torch
 import numpy as np
 import io
+from base64 import b64decode
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app) # Enable CORS for all routes
+
+# UPDATED: Add your Cloudflare domain to the allowed origins.
+# You may need to update this with your specific domain.
+CORS(app, resources={
+    r"/predict": {
+        "origins": [
+            "https://neural-pcb-project.vercel.app", 
+            "http://localhost:3000", 
+            "http://127.0.0.1:3000",
+            "https://appropriate-accuracy-suffering-d.trycloudflare.com",
+            "https://sensitive-delivers-peas-research.trycloudflare.com"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    },
+    r"/health": {
+        "origins": [
+            "https://neural-pcb-project.vercel.app", 
+            "http://localhost:3000", 
+            "http://127.0.0.1:3000",
+            "https://appropriate-accuracy-suffering-d.trycloudflare.com",
+            "https://sensitive-delivers-peas-research.trycloudflare.com"
+        ],
+        "methods": ["GET", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # Define the global model and class names
 model = None
@@ -28,6 +55,7 @@ def load_model():
     model_path = os.getenv('MODEL_PATH', 'best.pt')
     logger.info(f"Attempting to load model from {model_path} on device {DEVICE}...")
     try:
+        # NOTE: Using a simple reload here to ensure the latest changes are picked up.
         model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True, device=DEVICE)
         model.eval()
         CLASS_NAMES = model.names
@@ -50,32 +78,37 @@ def process_single_image(image_stream, frontend_image_id, frontend_name):
     if model is None:
         return {"image_id": frontend_image_id, "error": "Model is not loaded."}
     
+    pil_image = None
     try:
         if isinstance(image_stream, str): # Handle base64 encoded images
-            from base64 import b64decode
-            image_stream = io.BytesIO(b64decode(image_stream.split(',')[1]))
+            base64_data = image_stream.split(',')[1]
+            image_stream = io.BytesIO(b64decode(base64_data))
 
-        # Load the image using PIL and convert to RGB
+        # Load the image using PIL
         pil_image = Image.open(image_stream).convert('RGB')
         original_width, original_height = pil_image.size
+        
+        # Check for valid image dimensions
+        if original_width == 0 or original_height == 0:
+            return {"image_id": frontend_image_id, "error": "Processing failed: Image dimensions are zero."}
+
         img_np = np.array(pil_image)
         
         # Perform prediction
-        results = model(img_np)
+        results = model(img_np, size=original_width)
         
-        # Extract predictions. The 'results' object is not iterable directly.
-        # We need to access the specific prediction data.
+        # Extract predictions, ensuring it's a list even if no detections are found
         predictions_list = []
+        # The .pred attribute is a list of tensors for each image in the batch.
+        # We access the first item [0] for our single image.
         if results.pred and len(results.pred[0]):
-            # The results.pred attribute is a list of tensors.
-            # We iterate over the first tensor for the first image in the batch.
             for *box, conf, cls in results.pred[0]:
                 predictions_list.append({
                     "box": [float(b) for b in box],
                     "confidence": float(conf),
                     "class": CLASS_NAMES[int(cls)]
                 })
-        
+
         result = {
             "image_id": frontend_image_id,
             "predictions": predictions_list,
@@ -86,9 +119,17 @@ def process_single_image(image_stream, frontend_image_id, frontend_name):
             "total_detections": len(predictions_list)
         }
         return result
+
     except Exception as e:
+        # Return a result with zero dimensions if an error occurs during processing
         logger.error(f"Error processing image {frontend_name} (ID: {frontend_image_id}): {e}", exc_info=True)
-        return {"image_id": frontend_image_id, "error": f"Processing failed: {str(e)}"}
+        return {
+            "image_id": frontend_image_id,
+            "predictions": [],
+            "image_dimensions": { "width": 0, "height": 0 },
+            "total_detections": 0,
+            "error": f"Processing failed: {str(e)}"
+        }
 
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
@@ -97,7 +138,7 @@ def predict():
     
     if model is None:
         logger.error("Predict endpoint called but model is not loaded.")
-        return jsonify({"error": "Model not loaded. Please ensure your model file (best.pt or last.pt) is available or check server logs for critical errors during startup."}), 500
+        return jsonify({"error": "Model not loaded. Please check server logs."}), 500
 
     results = []
     total_defects = 0
@@ -203,7 +244,14 @@ def predict():
         logger.critical(f"CRITICAL ERROR: Unexpected error in predict endpoint: {str(e)}", exc_info=True)
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    if model is not None:
+        return jsonify({"status": "online", "message": "Model is loaded and ready."}), 200
+    else:
+        return jsonify({"status": "offline", "message": "Model is not loaded. Check server logs for details."}), 503
+
 if __name__ == '__main__':
     load_model()
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
